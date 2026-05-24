@@ -1,0 +1,15 @@
+# Runtime files
+wallet.json
+trade_log.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# PyCharm
+.idea/
+
+# Virtual environment
+venv/
