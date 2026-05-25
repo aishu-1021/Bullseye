@@ -113,9 +113,8 @@ def run_trader():
         'Wipro': ('stock', 'WIPRO.NS'),
         'Reliance': ('stock', 'RELIANCE.NS'),
         'HDFC Bank': ('stock', 'HDFCBANK.NS'),
-        'Zomato': ('stock', 'ZOMATO.NS'),
         'Bajaj Auto': ('stock', 'BAJAJ-AUTO.NS'),
-        'Tata Motors': ('stock', 'TATAMOTORS.NS'),
+        'Tata Motors': ('stock', 'TATAmotors.NS'),
         'Adani Ports': ('stock', 'ADANIPORTS.NS'),
         'SBI': ('stock', 'SBIN.NS'),
     }
@@ -130,14 +129,23 @@ def run_trader():
         print(f"\n🔍 Checking {asset}...")
 
         # Fetch data
-        if atype == 'crypto':
-            df         = fetch_crypto(asset)
-            price_col  = 'close'
-            currency   = '$'
-        else:
-            df         = fetch_stock(ticker)
-            price_col  = 'Close'
-            currency   = '₹'
+        try:
+            if atype == 'crypto':
+                df = fetch_crypto(asset)
+                price_col = 'close'
+                currency = '$'
+            else:
+                df = fetch_stock(ticker)
+                price_col = 'Close'
+                currency = '₹'
+
+            if df.empty or len(df) < 2:
+                print(f"  ⚠️ Skipping {asset} — not enough data")
+                continue
+
+        except Exception as e:
+            print(f" Skipping {asset} — Error: {str(e)[:50]}")
+            continue
 
         signal, price, rsi = generate_signal(df, price_col)
 
