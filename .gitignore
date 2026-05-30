@@ -1,6 +1,7 @@
 # Runtime files
 wallet.json
 trade_log.csv
+ml_wallet.json
 
 # Python
 __pycache__/
