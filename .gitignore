@@ -11,6 +11,7 @@ __pycache__/
 
 # PyCharm
 .idea/
+.streamlit/
 
 # Virtual environment
 venv/
