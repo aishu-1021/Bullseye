@@ -106,6 +106,16 @@ def add_features(df):
 
     df['target'] = (close.shift(-7) > close).astype(int)
 
+    # --- CROSS DETECTION ---
+    df['golden_cross'] = ((df['ma7'] > df['ma21']) & (df['ma7'].shift(1) <= df['ma21'].shift(1))).astype(int)
+    df['death_cross'] = ((df['ma7'] < df['ma21']) & (df['ma7'].shift(1) >= df['ma21'].shift(1))).astype(int)
+    df['ma7_above_ma21'] = (df['ma7'] > df['ma21']).astype(int)
+    df['macd_cross_up'] = (
+                (df['macd'] > df['macd_signal']) & (df['macd'].shift(1) <= df['macd_signal'].shift(1))).astype(int)
+    df['macd_cross_down'] = (
+                (df['macd'] < df['macd_signal']) & (df['macd'].shift(1) >= df['macd_signal'].shift(1))).astype(int)
+    df['high_volume'] = (df['vol_vs_avg'] > 1.5).astype(int)
+
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.ffill(inplace=True)
     df.dropna(inplace=True)
@@ -119,7 +129,10 @@ def get_ml_signal(df, asset_name, min_accuracy=0.52):
         'bb_upper', 'bb_lower', 'bb_width',
         'price_vs_ma7', 'price_vs_ma21',
         'change_1d', 'change_3d', 'change_7d',
-        'vol_change', 'vol_vs_avg', 'atr'
+        'vol_change', 'vol_vs_avg', 'atr',
+        'golden_cross', 'death_cross',
+        'ma7_above_ma21', 'macd_cross_up',
+        'macd_cross_down', 'high_volume'
     ]
 
     X = df[features]
@@ -204,9 +217,43 @@ def run_ml_trader():
 
             signal, confidence, accuracy, price = get_ml_signal(df, asset)
 
-            if signal == 'SKIP':
-                print(f"  ⏭️ Skipping — model accuracy too low ({accuracy*100:.1f}%)")
+            # Check cross signals
+            latest = df.iloc[-1]
+            golden_cross = latest['golden_cross'] == 1
+            death_cross = latest['death_cross'] == 1
+            ma7_above_ma21 = latest['ma7_above_ma21'] == 1  # trend direction
+            macd_up = latest['macd_cross_up'] == 1
+            high_vol = latest['high_volume'] == 1
+
+            # Override SKIP if Golden Cross detected TODAY
+            if signal == 'SKIP' and golden_cross:
+                signal = 'BUY'
+                confidence = 0.65
+                print(f"  ⚡ Golden Cross override!! Treating as BUY")
+
+            # Override SKIP if MA7 above MA21 AND MACD crossing up (strong uptrend!!)
+            elif signal == 'SKIP' and ma7_above_ma21 and macd_up:
+                signal = 'BUY'
+                confidence = 0.62
+                print(f"  ⚡ Uptrend + MACD Cross UP override!! Treating as BUY")
+
+            # Override SKIP if Death Cross detected TODAY
+            elif signal == 'SKIP' and death_cross:
+                signal = 'SELL'
+                confidence = 0.65
+                print(f"  ⚡ Death Cross override!! Treating as SELL")
+
+            elif signal == 'SKIP':
+                print(f"  ⏭️ Skipping — no strong signals ({accuracy * 100:.1f}%)")
                 continue
+
+            # Boost confidence if cross + ML agree!!
+            if signal == 'BUY' and (golden_cross or ma7_above_ma21):
+                confidence = min(confidence + 0.05, 0.99)
+                print(f"  🌟 Uptrend confirms BUY!! Confidence: {confidence * 100:.1f}%")
+            if signal == 'SELL' and death_cross:
+                confidence = min(confidence + 0.10, 0.99)
+                print(f"  🌟 Death Cross confirms SELL!! Confidence: {confidence * 100:.1f}%")
 
             print(f"  🧠 Accuracy: {accuracy*100:.1f}% | Signal: {signal} | Confidence: {confidence*100:.1f}%")
 
@@ -245,7 +292,13 @@ def run_ml_trader():
 
             # --- CHECK BUY ---
             if signal == 'BUY' and asset not in wallet['open_trades']:
-                invest_amount = wallet['balance'] * TRADE_PERCENT
+                # Invest more when Golden Cross AND ML agree!!
+                if golden_cross and confidence > 0.70:
+                    invest_pct = 0.30  # 30% on strong signal!!
+                    print(f"  💪 Strong signal — investing 30%!!")
+                else:
+                    invest_pct = TRADE_PERCENT  # normal 20%
+                invest_amount = wallet['balance'] * invest_pct
                 if invest_amount > 100:
                     wallet['balance'] -= invest_amount
                     wallet['open_trades'][asset] = {

@@ -21,6 +21,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Refresh button styled properly
+col1, col2 = st.columns([6, 1])
+with col2:
+    if st.button("↺ Refresh", type="secondary"):
+        st.cache_data.clear()
+        st.rerun()
+
 # --- CSS ---
 st.markdown("""
 <style>
@@ -39,6 +46,21 @@ st.markdown("""
     --text-primary: #e8e8e8;
     --text-secondary: #888888;
     --text-dim: #444444;
+}
+/* Refresh button */
+[data-testid="stButton"] button {
+    background: transparent !important;
+    border: 1px solid #222222 !important;
+    color: #444444 !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 0.65rem !important;
+    letter-spacing: 0.1em !important;
+    padding: 0.3rem 0.8rem !important;
+    border-radius: 2px !important;
+}
+[data-testid="stButton"] button:hover {
+    border-color: #00ff88 !important;
+    color: #00ff88 !important;
 }
 html, body, [data-testid="stAppViewContainer"] {
     background: var(--bg-primary) !important;
@@ -96,10 +118,21 @@ def load_wallet():
     return {'balance': 10000, 'starting': 10000, 'open_trades': {}, 'total_trades': 0, 'wins': 0, 'losses': 0}
 
 # --- FETCH DATA ---
+# Daily data for ML training
 @st.cache_data(ttl=300)
 def fetch_crypto(symbol, days=500):
     binance = ccxt.binance()
     ohlcv   = binance.fetch_ohlcv(symbol, timeframe='1d', limit=days)
+    df      = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df.set_index('timestamp', inplace=True)
+    return df
+
+# 1 Hour data for charts only
+@st.cache_data(ttl=60)
+def fetch_crypto_hourly(symbol, hours=120):
+    binance = ccxt.binance()
+    ohlcv   = binance.fetch_ohlcv(symbol, timeframe='1h', limit=hours)
     df      = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     df.set_index('timestamp', inplace=True)
@@ -140,6 +173,37 @@ def add_features(df):
     df['vol_vs_avg'] = vol / vol.rolling(20).mean()
     df['atr'] = ta.atr(high, low, close, length=14)
     df['target'] = (close.shift(-7) > close).astype(int)
+    # --- CROSS DETECTION ---
+    # Golden Cross → MA7 crosses above MA21
+    df['golden_cross'] = (
+            (df['ma7'] > df['ma21']) &
+            (df['ma7'].shift(1) <= df['ma21'].shift(1))
+    ).astype(int)
+
+    # Death Cross → MA7 crosses below MA21
+    df['death_cross'] = (
+            (df['ma7'] < df['ma21']) &
+            (df['ma7'].shift(1) >= df['ma21'].shift(1))
+    ).astype(int)
+
+    # MA7 currently above MA21 (trend direction)
+    df['ma7_above_ma21'] = (df['ma7'] > df['ma21']).astype(int)
+
+    # MACD crossover → MACD crosses above signal line
+    df['macd_cross_up'] = (
+            (df['macd'] > df['macd_signal']) &
+            (df['macd'].shift(1) <= df['macd_signal'].shift(1))
+    ).astype(int)
+
+    # MACD crossover → MACD crosses below signal line
+    df['macd_cross_down'] = (
+            (df['macd'] < df['macd_signal']) &
+            (df['macd'].shift(1) >= df['macd_signal'].shift(1))
+    ).astype(int)
+
+    # Volume confirmation — is volume above 20 day average?
+    df['high_volume'] = (df['vol_vs_avg'] > 1.5).astype(int)
+
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.ffill(inplace=True)
     df.dropna(inplace=True)
@@ -153,7 +217,11 @@ def get_ml_signal(df):
         'bb_upper', 'bb_lower', 'bb_width',
         'price_vs_ma7', 'price_vs_ma21',
         'change_1d', 'change_3d', 'change_7d',
-        'vol_change', 'vol_vs_avg', 'atr'
+        'vol_change', 'vol_vs_avg', 'atr',
+        # NEW FEATURES!!
+        'golden_cross', 'death_cross',
+        'ma7_above_ma21', 'macd_cross_up',
+        'macd_cross_down', 'high_volume'
     ]
     X = df[features]
     y = df['target']
@@ -180,7 +248,7 @@ def plot_chart(df, asset_name, currency):
     fig.add_trace(go.Scatter(x=df.index[-60:], y=df['ma21'].tail(60),
         line=dict(color='#0088ff', width=1), name='MA21', opacity=0.8))
     fig.update_layout(
-        title=dict(text=asset_name, font=dict(family='IBM Plex Mono', size=12, color='#888888')),
+        title=dict(text=f"{asset_name} — 1H", font=dict(family='IBM Plex Mono', size=12, color='#888888')),
         xaxis_rangeslider_visible=False, height=280,
         paper_bgcolor='#0a0a0a', plot_bgcolor='#0a0a0a',
         font=dict(family='IBM Plex Mono', color='#888888'),
@@ -219,6 +287,72 @@ st.markdown("""
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+# --- LIVE PRICE TICKER ---
+@st.cache_data(ttl=60)
+def fetch_live_prices():
+    binance = ccxt.binance()
+    prices  = {}
+    tickers = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'LTC/USDT', 'XRP/USDT', 'DOGE/USDT']
+    for symbol in tickers:
+        try:
+            t = binance.fetch_ticker(symbol)
+            prices[symbol] = {
+                'price'  : t['last'],
+                'change' : t['percentage'],
+            }
+        except:
+            pass
+    return prices
+
+live_prices = fetch_live_prices()
+ticker_html = '<div style="display:flex;gap:2rem;padding:1rem 0;border-bottom:1px solid #222;margin-bottom:2rem;overflow-x:auto;flex-wrap:wrap;">'
+for symbol, data in live_prices.items():
+    name   = symbol.replace('/USDT', '')
+    change = data['change'] or 0
+    color  = '#00ff88' if change >= 0 else '#ff3355'
+    sign   = '+' if change >= 0 else ''
+    ticker_html += f"""
+        <div style="font-family:IBM Plex Mono;min-width:130px;">
+            <div style="font-size:0.6rem;color:#444;letter-spacing:0.1em">{name}</div>
+            <div style="font-size:0.9rem;color:#e8e8e8;font-weight:600">${data['price']:,.2f}</div>
+            <div style="font-size:0.7rem;color:{color}">{sign}{change:.2f}%</div>
+        </div>"""
+ticker_html += '</div>'
+st.markdown(ticker_html, unsafe_allow_html=True)
+
+# --- CROSS ALERTS ---
+cross_alerts = []
+for asset, (atype, ticker, name, currency) in assets.items():
+    try:
+        df_check = fetch_crypto(asset) if atype == 'crypto' else fetch_stock(ticker)
+        df_check = add_features(df_check)
+        latest   = df_check.iloc[-1]
+        prev     = df_check.iloc[-2]
+
+        if latest['golden_cross'] == 1:
+            cross_alerts.append(('🟢 GOLDEN CROSS', name, 'MA7 crossed above MA21 — Bullish!!', '#00ff88'))
+        if latest['death_cross'] == 1:
+            cross_alerts.append(('🔴 DEATH CROSS', name, 'MA7 crossed below MA21 — Bearish!!', '#ff3355'))
+        if latest['macd_cross_up'] == 1:
+            cross_alerts.append(('📈 MACD CROSS UP', name, 'MACD crossed above signal — Momentum!!', '#00ff88'))
+        if latest['macd_cross_down'] == 1:
+            cross_alerts.append(('📉 MACD CROSS DOWN', name, 'MACD crossed below signal — Weakening!!', '#ff3355'))
+    except:
+        pass
+
+if cross_alerts:
+    st.markdown('<div class="section-label">Cross Alerts — Today</div>', unsafe_allow_html=True)
+    for signal, asset, message, color in cross_alerts:
+        st.markdown(f"""
+        <div style="background:#141414;border:1px solid #222;border-left:3px solid {color};
+             padding:0.75rem 1.25rem;margin-bottom:0.5rem;font-family:IBM Plex Mono;">
+            <span style="color:{color};font-size:0.75rem;font-weight:600">{signal}</span>
+            <span style="color:#888;font-size:0.75rem;margin-left:1rem">{asset}</span>
+            <span style="color:#444;font-size:0.7rem;margin-left:1rem">{message}</span>
+        </div>
+        """, unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
 # =====================
 # WALLET
@@ -327,7 +461,15 @@ for i, (asset, (atype, ticker, name, currency)) in enumerate(assets.items()):
             'Up Prob'    : f"{up_prob*100:.1f}%",
             'Down Prob'  : f"{down_prob*100:.1f}%",
         })
-        chart_data[name] = plot_chart(df, name, currency)
+        # Use hourly data for charts!!
+        try:
+            if atype == 'crypto':
+                df_chart = fetch_crypto_hourly(asset, hours=120)
+            else:
+                df_chart = df.tail(60)  # stocks stay daily
+            chart_data[name] = plot_chart(df_chart, name, currency)
+        except:
+            chart_data[name] = plot_chart(df.tail(60), name, currency)
 
     except Exception as e:
         signal_rows.append({
