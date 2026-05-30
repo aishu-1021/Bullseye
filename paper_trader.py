@@ -59,7 +59,7 @@ def generate_signal(df, price_col='close'):
     ma7    = latest['MA7']
     close  = latest[price_col]
 
-    buy  = (rsi < 30 and close > ma7)
+    buy  = (rsi < 40 and close > ma7)
     sell = (rsi > 70 or (close < ma7 and rsi > 50))
 
     if buy:
@@ -113,8 +113,6 @@ def run_trader():
         'Wipro': ('stock', 'WIPRO.NS'),
         'Reliance': ('stock', 'RELIANCE.NS'),
         'HDFC Bank': ('stock', 'HDFCBANK.NS'),
-        'Bajaj Auto': ('stock', 'BAJAJ-AUTO.NS'),
-        'Tata Motors': ('stock', 'TATAmotors.NS'),
         'Adani Ports': ('stock', 'ADANIPORTS.NS'),
         'SBI': ('stock', 'SBIN.NS'),
     }
@@ -144,17 +142,21 @@ def run_trader():
                 continue
 
         except Exception as e:
-            print(f" Skipping {asset} — Error: {str(e)[:50]}")
+            print(f"  ❌ Skipping {asset} — Error fetching data")
             continue
 
         signal, price, rsi = generate_signal(df, price_col)
 
         # --- CHECK OPEN TRADE EXITS FIRST ---
+        # --- CHECK OPEN TRADE EXITS FIRST ---
         if asset in wallet['open_trades']:
-            trade      = wallet['open_trades'][asset]
-            buy_price  = trade['buy_price']
-            invested   = trade['invested']
+            trade = wallet['open_trades'][asset]
+            buy_price = trade['buy_price']
+            invested = trade['invested']
             change_pct = (price - buy_price) / buy_price
+
+            # ALWAYS show current status first!!
+            print(f"  📊 Open Trade | Bought at: {currency}{buy_price:,.2f} | Current: {currency}{price:,.2f} | P/L: {change_pct * 100:+.1f}%")
 
             exit_reason = None
 
