@@ -1,0 +1,40 @@
+name: 🎯 Bullseye Auto Trader
+on:
+  schedule:
+    # Runs every 6 hours!!
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install ccxt yfinance pandas pandas-ta numpy
+          pip install xgboost scikit-learn
+          pip install tensorflow
+          pip install textblob requests beautifulsoup4
+          pip install streamlit plotly
+
+      - name: 🤖 Run Bullseye LSTM Trader
+        run: python ml_trader_lstm.py
+
+      - name: 💾 Save wallet state to GitHub
+        run: |
+          git config --global user.email "bullseye@bot.com"
+          git config --global user.name "Bullseye Bot"
+          git add ml_wallet.json ml_trade_log.csv || true
+          git diff --staged --quiet || git commit -m "🎯 Auto trade $(date +'%Y-%m-%d %H:%M')"
+          git push || true
